@@ -5,7 +5,7 @@ class apiError extends Error{
         statusCode,
         message = "something went wromg",
         errors = [],
-         statck = ""
+         stack = ""
         
     ){
         super(message)
