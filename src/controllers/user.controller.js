@@ -78,21 +78,22 @@ const loginUser = asynchandler(async(req,res) =>{
 const generateAccesandRefreshToken = async(userId) =>{
     try{
         const user = await User.findById(userId)
-        const accessToken = User.generateAccessToken()
-        const refreshtoken = User.generateRefreshToken()
+        const accessToken = user.generateAccessToken()
+        const refreshtoken = user.generateRefreshToken()
 
         user.refreshtoken = refreshtoken
         await user.save({ validateBeforeSave: false})
         return {accessToken,refreshtoken}
 
     }catch(error){
-        throw new ApiError(500,"Something went wrong  while generating refresh and access token")
+        console.error("original error:",error);
+        throw error;
     }
 }
 
 
     const {email,username,password} = req.body
-    if(!username || !email) {
+    if(!(username || email)) {
         throw new ApiError(400, "username or email is required")
     }
 
@@ -102,6 +103,7 @@ const generateAccesandRefreshToken = async(userId) =>{
     if(!user) {
         throw new ApiError(404,"User does not exist")
     }
+    const isPasswordValid= await user.isPasswordCorrect(password);
     if(!isPasswordValid){
         throw new ApiError(401," Invalid user credentials")
     }
@@ -115,7 +117,7 @@ const generateAccesandRefreshToken = async(userId) =>{
         secure: true
     }
     return res.status(200).
-    cookie("accesToken", accessToken,options)
+    cookie("accessToken", accessToken,options)
     .cookie("refreshtoken", refreshtoken,options)
     .json(
         new apiresponse(
@@ -131,7 +133,7 @@ const generateAccesandRefreshToken = async(userId) =>{
 })
 
 const logoutUser = asynchandler(async(req,res) => {
-    User.findByIdAndUpdate(
+   await User.findByIdAndUpdate(
         req.user._id,
         {
             $set:{
@@ -149,12 +151,12 @@ const logoutUser = asynchandler(async(req,res) => {
     }
     return res
     .status(200)
-    .clearCookies("accessToken",options)
-    .clearCookies("refreshtoken",options)
+    .clearCookie("accessToken",options)
+    .clearCookie("refreshtoken",options)
     .json(new apiresponse(200,{},"User logged out"))
 
 })
-const refreshtoken = asynchandler(async(req,res) =>{
+const refreshaccessToken = asynchandler(async(req,res) =>{
     const incomingRefreshtoken = req.cookies.
     refreshtoken || req.body.refreshtoken
 
@@ -207,7 +209,7 @@ const changeCurrentPassword = asynchandler(async(req,res) =>
 {
     const{oldPassword,newPassword} =req.body
     const user = await User.findById(req.user?.id)
-    const isPasswordCorrect(oldPassword)
+    const isPasswordCorrect = await user.isPasswordCorrect(oldPassword)
 
     if(!isPasswordCorrect) {
         throw new ApiError(400,"Invalid old password")
@@ -258,7 +260,7 @@ const avatar = await uploadOnCloudinary(avatarlocalpath)
 if(!avatar.url){
     throw new ApiError(400,"Avatar file is missing")
 }
-const user =await User.findByIdAndDelete(
+const user =await User.findByIdAndUpdate(
     req.user?._id,
     {
         $set:{
@@ -287,7 +289,7 @@ const coverImage = await uploadOnCloudinary(coverImagelocalpath)
 if(!coverImage.url){
     throw new ApiError(400,"coverImage file is missing")
 }
-const user =await User.findByIdAndDelete(
+const user =await User.findByIdAndUpdate(
     req.user?._id,
     {
         $set:{
@@ -306,14 +308,132 @@ return res
 })
 
 
+const getUserChannelProfile = asynchandler(async(req,res) =>{
+    const {username} = req.params
+    if(!username?.trim()){
+        throw new ApiError(400,"username is missing")
+    }
+
+    const channel = await User.aggregate([
+        {
+            $match: {
+                username: username?.toLowerCase()
+            }
+        },
+        {
+            $lookup:{
+                from: "subscription",
+                localField: "_id",
+                foreignField: "channel",
+                as: "subscribers"
+            }
+        },
+        { 
+            
+               $lookup:{
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "subscriber",
+                as: "subscribedTo"
+            }
+            
+        },
+        {
+            $addFields: {
+                subscribersCount: {
+                    $size: "$subscribers"
+                },
+                channelsSubscribedToCount: {
+                    $size: "$subscribedTo"
+                },
+                isSubscribed: {
+                  $cond: {
+                    if:{$in:[req.user?._id,"$subscribers.subscriber"]},
+                    then: true,
+                    else:false
+                  }  
+                }
+            }
+        },
+        {
+            $project: {
+                fullname: 1,
+                username:1,
+                subscribersCount:1,
+                channelsSubscribedToCount:1,
+                isSubscribed:1,
+                avatar: 1,
+                coverImage: 1,
+                email:1
+
+            }
+        }
+    ])
+
+    if(!channel?.length){
+        throw new ApiError(404,"channel does not exists")
+    }
+    return res
+    .status(200)
+    .json(
+        new apiresponse(200,"channel is fetched successfully")
+    )
+})
+
+const getWatchHistory = asynchandler(async(req,res) =>{
+    const user = await User.aggregate([ 
+   {  $match: {
+        _id: new mongoose.Types.ObjectId(req.user._id)
+    }
+},
+    {
+        $lookup: {
+            from: "videos",
+            localField: "watchHistory",
+            foreignField: "_id",
+            as: "watchHistory",
+            pipeline: [
+                {
+                  $project: {
+                    fullname: 1,
+                    username: 1,
+                    avatar: 1
+                  }  
+                }
+            ]
+
+        }
+    },{
+        $addFields:{
+            owner:{
+                $first: "$owner"
+            }
+        }
+    }
+    ])
+     return res
+     .status(200)
+     .json(
+        new apiresponse(
+            200,
+            user[0].getWatchHistory,
+            "Watch history fetched successfully"
+        )
+     )
+})
+
 
 
 export {registerUser,
     loginUser,
     logoutUser,
-    refreshtoken,
     changeCurrentPassword,
     getCurrentUser,
     updateAccountDetails,
-    updateUserAvatar
+    updateUserAvatar,
+    refreshaccessToken,
+    getUserChannelProfile,
+    getWatchHistory,
+    updateUsercoverImage
+
 }
